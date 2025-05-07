@@ -1,2 +1,2 @@
 pip install streamlit -U
-pip install fbm matplotlib scipy plotly seaborn sklearn shutil gzip pyaml
+pip install fbm matplotlib scipy plotly seaborn scikit-learn pytest-shutil gzip pyaml numba
