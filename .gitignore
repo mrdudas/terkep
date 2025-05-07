@@ -1,0 +1,17 @@
+# Ne vegyen figyelembe importált fájlokat
+import/
+
+# Python cache fájlok
+__pycache__/
+
+# Adatbázis fájlok vagy könyvtár
+database/
+
+# Mountolt meghajtók vagy ideiglenes fájlok
+mnt/
+
+*.log
+*.sqlite3
+*.db
+.env
+venv/
