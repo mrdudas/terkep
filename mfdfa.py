@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import linregress 
 from numpy.polynomial.polynomial import Polynomial
 import streamlit as st
-
+from numba import njit
 # Numpy-alapú mozgóátlag + lineáris interpoláció
 def moving_average_with_interpolation(x, window=3):
     kernel = np.ones(window) / window
@@ -18,6 +18,49 @@ def moving_average_with_interpolation(x, window=3):
     
     return smoothed
 
+
+@njit
+def extend_array_polyfit(y, new_length):
+    """
+    Egy meglévő 1D tömböt kiterjeszt egy megadott hosszra polinomos illesztéssel.
+    Az új tömb értékeit egy illesztett polinom alapján számítja (3. fok vagy kevesebb).
+    
+    Paraméterek:
+    - y: eredeti tömb (1D np.array)
+    - new_length: az új tömb kívánt hossza
+    
+    Visszaad:
+    - y_extended: új tömb, polinomos módon kiterjesztve
+    """
+    N_orig = len(y)
+    if new_length <= N_orig:
+        return y[:new_length]  # ha rövidítés, csak levágjuk
+
+    x_orig = np.linspace(0.0, 1.0, N_orig)
+    x_new = np.linspace(0.0, 1.0, new_length)
+    
+    # Illesztés (Numba nem támogatja np.polyfit -> itt saját kód kell)
+    # Legfeljebb 3. fokú polinom illesztése normál egyenlettel: X^T X beta = X^T y
+    deg = min(3, N_orig - 1)
+    X = np.zeros((N_orig, deg + 1))
+    for i in range(deg + 1):
+        X[:, i] = x_orig ** (deg - i)
+    
+    # Normálegyenlet megoldása: beta = (X^T X)^-1 X^T y
+    XtX = X.T @ X
+    Xty = X.T @ y
+    beta = np.linalg.solve(XtX, Xty)
+
+    # Új értékek kiszámítása
+    y_extended = np.zeros(new_length)
+    for i in range(new_length):
+        xi = x_new[i]
+        val = 0.0
+        for j in range(deg + 1):
+            val += beta[j] * xi ** (deg - j)
+        y_extended[i] = val
+
+    return y_extended
 
 
 
@@ -35,26 +78,30 @@ def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5,
     Z_q_s = []  # Z(q, s) minden skálára
     log_scales = np.log2(scales)
     q_values = np.array(q_values)
-
+    sig_len = N
+    st.write (len(scales))
+    cfs = np.zeros((len(scales), N))
+    i=0 
     for s in scales:
+        st.write ("Scale", s)
         Ns = N // s
         F_s = []
-        #cfs =np.range(0, Ns * s, s)
-        #st.write (range(0, Ns * s, s)) 
-        cfs = []
+
         for start in range(0, Ns * s, s):
+            #st.write ("start", start, "end", start+s)   
             segment = Y[start:start + s]
             x = np.arange(s)
             # polinom detrend
             coefs = Polynomial.fit(x, segment, m).convert().coef
-            cfs[int(start//s)] = coefs
+            #cfs[] = coefs
             fit = np.polyval(coefs[::-1], x)
             F_s.append(np.mean((segment - fit) ** 2))
         F_s = np.array(F_s)
-        #cfs = np.array(cfs)
-        st.write (f"F_s: ",F_s)
-        st.write (f"cfs: ",cfs.shape)
-        
+        st.write (f"Skála: {s}, F_s: {len(F_s)}, m= {m}")
+        im_F_S = extend_array_polyfit (F_s, sig_len)
+        cfs[i] = im_F_S
+        #cfs[i] = im_F_S / im_F_S.max()
+        i+=1 
         Z_q = []
 
         for q in q_values:
@@ -70,7 +117,37 @@ def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5,
     #st.write (f"Z_q_s shape: {Z_q_s.shape}")
     #st.write (Z_q_s)
     log_Z_q_s = np.log2(Z_q_s + 1e-12)
+    st.write (f"cfs: {cfs.shape}")
+    N = len(signal)
+    t = np.linspace(0, 1, N)
 
+    fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=False)
+
+    target_width = 1000
+    #coef_ds = preprocess_for_plotting(np.abs(coef), target_width)
+    #maxima_ds = preprocess_for_plotting(maxima, target_width)
+    cfs = preprocess_for_plotting(np.abs(cfs), target_width)
+    
+    # 1. Eredeti jel
+    axs[0].plot(t, signal, color='black')
+    axs[0].set_title("Eredeti jel")
+    axs[0].set_ylabel("Amplitúdó")
+
+    # 2. CWT spektrum
+    extent = [0, 1, np.max(scales), np.min(scales)]
+    axs[1].imshow(np.abs(cfs), extent=extent, aspect='auto', cmap='viridis')
+    axs[1].set_title("CWT amplitúdó (Ricker hullám)")
+    axs[1].set_ylabel("Skála")
+
+    # 3. Modulus maxima
+    axs[2].imshow(Z_q_s, extent=extent, aspect='auto', cmap='hot')
+    axs[2].set_title("Z_q_s")
+    axs[2].set_ylabel("Skála")
+    st.pyplot(fig)
+
+    
+    
+    
     h_q = []
     tau_q = []
     coef = []
