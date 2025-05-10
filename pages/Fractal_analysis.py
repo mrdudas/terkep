@@ -19,7 +19,7 @@ import filters as flt
 import mfdfa
 import matplotlib.pyplot as plt
 import numpy as np
-
+from scipy.fft import rfft, rfftfreq
 
 
 def plot_log_zq_vs_scale(signal, q, window_sizes):
@@ -211,6 +211,21 @@ def plot_alpha_falpha(alpha, falpha, ):
 
     return plt
 
+def signal_to_db(signal, ref=1.0, amin=1e-12):
+    """Minden értékre decibel skálázás"""
+    magnitude = np.abs(signal)
+    return 20 * np.log10(np.maximum(magnitude, amin) / ref)
+
+
+def power_spectrum_db(signal, fs=1.0, ref=1.0):
+    N = len(signal)
+    fft_vals = rfft(signal)
+    power = np.abs(fft_vals)**2 / N
+    freqs = rfftfreq(N, d=1/fs)
+    power_db = 10 * np.log10(np.maximum(power, 1e-12) / ref)
+    return freqs, power_db
+
+
 def lowpass_filter(data, sample_rate_hz , cutoff ):
     nyquist = 0.5 * sample_rate_hz
     #cutoff = sample_rate_hz / 4
@@ -346,6 +361,7 @@ def remove_short_valid_sequences(y, min_length=5):
     # Ha érvényes (True) és rövidebb, mint minimum hossz: NaN lesz
     y[(is_valid) & (lengths < min_length)] = np.nan
     return y
+
 def remove_low_variability_segments(y, window=10, std_thresh=1e-3):
     y = pd.Series(y)
     # Mozgó szórás
@@ -526,6 +542,16 @@ def do_multifractal (Measurements,  dir ="", filename = "tmp", kernel_size=1, wa
     elif st.session_state.get("metrics") == "Teszt_generate_binomial_measure":
         data = ts.generate_binomial_measure(length=len(Measurements))
     
+    if st.session_state.get("do_db_normalization"): 
+        data = signal_to_db(data, ref=1.0, amin=1e-12)
+        #data = compress_dynamics_logscale(data, epsilon=1e-8)
+        #data = shift_to_positive(data, epsilon=1e-6)
+        #data = data - np.min(data) + 1e-6
+        #data = data / np.max(data)
+        #st.write (f"Data: {len(data)}")
+        #st.line_chart(data)
+
+
     filename = filename+"_"+ metrics_txt
 
                         #Modes:
@@ -588,25 +614,25 @@ def do_multifractal (Measurements,  dir ="", filename = "tmp", kernel_size=1, wa
                 st.write (f"Save path: {os.path.join(dir, f'{filename}__CHHB_spectrum.png')}")
             #fig.close()
             chhb_segments, chhb_avalues = {}, {}
-        if st.session_state["do_10sec"]:
-            sampling_rate = 1.0 / (Measurements["TIME"].diff().median())
-            window_sec = 10.0
-            chhb_segments, chhb_avalues = chhabrajensen.analyze_multifractal_over_time (data, sampling_rate, window_sec, window_sizes=window_sizes, q_values=q_values, r2_threshold=0.95)
-            #st.write (f"CHHB α-értékek időfüggése: {chhb_segments}, {chhb_avalues}")    
-            plt.figure(figsize=(10, 4))
-            plt.plot(chhb_segments, chhb_avalues, marker='o', linestyle='-')
-            plt.xlabel("Idő (s)")
-            plt.ylabel("CHHB α-értékek")
-            plt.title("CHHB α-értékek időfüggése")
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(os.path.join(dir, f"{filename}_CHHB_avalues.png"), dpi=300)
-            st.pyplot (plt)
-            plt.close()
-            i=0
-            for segment in chhb_segments:
-                i+=1
-                chhb_metrics["alpha_segment("+str(i)+")"] = chhb_avalues[i-1]
+            if st.session_state["do_10sec"]:
+                sampling_rate = 1.0 / (Measurements["TIME"].diff().median())
+                window_sec = 10.0
+                chhb_segments, chhb_avalues = chhabrajensen.analyze_multifractal_over_time (data, sampling_rate, window_sec, window_sizes=window_sizes, q_values=q_values, r2_threshold=0.95)
+                #st.write (f"CHHB α-értékek időfüggése: {chhb_segments}, {chhb_avalues}")    
+                plt.figure(figsize=(10, 4))
+                plt.plot(chhb_segments, chhb_avalues, marker='o', linestyle='-')
+                plt.xlabel("Idő (s)")
+                plt.ylabel("CHHB α-értékek")
+                plt.title("CHHB α-értékek időfüggése")
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(os.path.join(dir, f"{filename}_CHHB_avalues.png"), dpi=300)
+                st.pyplot (plt)
+                plt.close()
+                i=0
+                for segment in chhb_segments:
+                    i+=1
+                    chhb_metrics["alpha_segment("+str(i)+")"] = chhb_avalues[i-1]
 
 
     if st.session_state["do_wtmm"]: 
@@ -648,31 +674,31 @@ def do_multifractal (Measurements,  dir ="", filename = "tmp", kernel_size=1, wa
                 # signal, scales, q_values, alpha, f_alpha, tau_q, Z_q_s, coef, maxima, output_dir="output", filename_prefix="wtmm_result", dpi=300
                 fig, axis = wtmm.plot_wtmm_all_outputs(signal, scales, q_values, wtmm_alpha, wtmm_f_alpha, wtmm_tau_q, wtmm_Z_q_s, wtmm_coef, wtmm_maxima, output_dir=dir, filename_prefix=f"{filename}_WTMM_result_", dpi=300)
    
-        
-        wtmm_segments, wtmm_avalues = {}, {}
-        if st.session_state["do_10sec"]:
-            sampling_rate = 1.0 / (Measurements["TIME"].diff().median())
-            window_sec = 10.0
-            #st.write (f"Jel Hossza: {len(signal)}") 
-            wtmm_segments, wtmm_avalues = wtmm.analyze_multifractal_over_time(signal.copy(), sampling_rate, window_sec, scales, q_values, keep_ratio=0.3)
-            # plot segments and a values
-            import matplotlib.pyplot as plt 
-            plt.figure(figsize=(10, 4))
-            plt.plot(wtmm_segments, wtmm_avalues, marker='o', linestyle='-')
-            plt.xlabel("Idő (s)")
-            plt.ylabel("wtmm α-értékek")
-            plt.title("wtmm α-értékek időfüggése")
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(os.path.join(dir, f"{filename}_WTMM_avalues.png"), dpi=300)
-            st.pyplot (plt)
-            plt.close()
-            #st.write (wtmm_segments)
-            i=0
-            for segment in wtmm_segments:
-                i+=1
-                wtmm_metrics["alpha_segment("+str(i)+")"] = wtmm_avalues[i-1]
-        
+            
+            wtmm_segments, wtmm_avalues = {}, {}
+            if st.session_state["do_10sec"]:
+                sampling_rate = 1.0 / (Measurements["TIME"].diff().median())
+                window_sec = 10.0
+                #st.write (f"Jel Hossza: {len(signal)}") 
+                wtmm_segments, wtmm_avalues = wtmm.analyze_multifractal_over_time(signal.copy(), sampling_rate, window_sec, scales, q_values, keep_ratio=0.3)
+                # plot segments and a values
+                import matplotlib.pyplot as plt 
+                plt.figure(figsize=(10, 4))
+                plt.plot(wtmm_segments, wtmm_avalues, marker='o', linestyle='-')
+                plt.xlabel("Idő (s)")
+                plt.ylabel("wtmm α-értékek")
+                plt.title("wtmm α-értékek időfüggése")
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(os.path.join(dir, f"{filename}_WTMM_avalues.png"), dpi=300)
+                st.pyplot (plt)
+                plt.close()
+                #st.write (wtmm_segments)
+                i=0
+                for segment in wtmm_segments:
+                    i+=1
+                    wtmm_metrics["alpha_segment("+str(i)+")"] = wtmm_avalues[i-1]
+            
         if wtmm_alpha is not None and wtmm_f_alpha is not None:    
             fig, axis = wtmm.plot_wtmm_results(signal, scales, q_values, wtmm_alpha, wtmm_f_alpha, wtmm_tau_q, wtmm_Z_q_s, wtmm_coef, wtmm_maxima, dpi=300)
             st.pyplot(fig)
@@ -1110,6 +1136,7 @@ def main():
                 metrics = st.selectbox ("Mit vizsgáljunk",options=["Displacement", "Tekintet X", "Pupilla", "Total Eye Energy", "Teszt_Gauss", "Teszt_cantor_measure", "Teszt_multiplicative_cascade", "Teszt_Fractional_Brownian_Motion", "Teszt_generate_multifractal_signal", "Teszt_generate_binomial_measure" ] , key="metrics")
                 cut_60s = st.checkbox("Csak az első 60s vizsgáljuk? ", value=True, key="cut_60s")
                 do_10sec = st.checkbox("10 sec ablakokban vizsgáljuk? ", value=False, key="do_10sec")
+                do_db_normalization = st.checkbox("Do DB Normalization", value=False, key="do_db_normalization")
                 
                 
                 ccol1,ccol2,= st.columns(2)

@@ -63,128 +63,135 @@ def extend_array_polyfit(y, new_length):
     return y_extended
 
 
-
-def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5, 41),  m=3):
+def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5, 41), m=3):
     """
-    Részletes MFDFA implementáció.
-    Visszatér: alpha, f_alpha, tau_q, Z_q_s (scaling), illesztési együtthatók, R^2, stb.
+    Compute the multifractal spectrum of a signal using MFDFA.
+    
+    Args:
+        signal: 1D numpy array, input time series
+        scales: Array of segment sizes (default: logarithmic scales)
+        q_values: Array of moment orders (default: -5 to 5)
+        m: Polynomial degree for detrending (default: 3)
+    
+    Returns:
+        alpha: Singularity strength
+        f_alpha: Multifractal spectrum
+        tau_q: Mass exponent
+        Z_q_s: Fluctuation functions
+        coef: Regression coefficients (slope, intercept)
+        h_q: Generalized Hurst exponents
+        log_scales: Logarithmic scales
+        r2: R-squared values for regression
     """
+    # Input validation
+    signal = np.asarray(signal)
+    if signal.ndim != 1 or len(signal) < 100:
+        raise ValueError("Signal must be a 1D array with sufficient length.")
+    
     N = len(signal)
-    Y = np.cumsum(signal - np.mean(signal))  # profil
-    #Y = signal.copy()
+    Y = np.cumsum(signal - np.mean(signal))  # Cumulative sum with mean subtraction
+    
+    # Default scales
     if scales is None:
         scales = np.unique(np.logspace(2, np.log2(N//4), num=20, base=2, dtype=int))
-
-    Z_q_s = []  # Z(q, s) minden skálára
+    
+    scales = np.asarray(scales)
+    if np.any(scales <= 0) or np.any(scales > N//2):
+        raise ValueError("Scales must be positive and less than half the signal length.")
+    
     log_scales = np.log2(scales)
-    q_values = np.array(q_values)
-    sig_len = N
-    st.write (len(scales))
-    cfs = np.zeros((len(scales), N))
-    i=0 
+    q_values = np.asarray(q_values)
+    
+    Z_q_s = []
+    cfs = np.zeros((len(scales), N))  # Store detrended fluctuations
+    i = 0
+    
     for s in scales:
-        st.write ("Scale", s)
         Ns = N // s
         F_s = []
-
+        detrended_Y_at_scale = np.full_like(Y, np.nan)
+        
         for start in range(0, Ns * s, s):
-            #st.write ("start", start, "end", start+s)   
             segment = Y[start:start + s]
             x = np.arange(s)
-            # polinom detrend
             coefs = Polynomial.fit(x, segment, m).convert().coef
-            #cfs[] = coefs
             fit = np.polyval(coefs[::-1], x)
-            F_s.append(np.mean((segment - fit) ** 2))
+            detrended = segment - fit
+            fluctuation = np.sqrt(np.mean(detrended ** 2))  # RMS fluctuation
+            F_s.append(fluctuation)
+            detrended_Y_at_scale[start:start + s] = detrended
+        
         F_s = np.array(F_s)
-        st.write (f"Skála: {s}, F_s: {len(F_s)}, m= {m}")
-        im_F_S = extend_array_polyfit (F_s, sig_len)
-        cfs[i] = im_F_S
-        #cfs[i] = im_F_S / im_F_S.max()
-        i+=1 
+        cfs[i] = detrended_Y_at_scale
+        i += 1
+        
         Z_q = []
-
         for q in q_values:
-            if q == 0:
-                Z = np.exp(0.5 * np.mean(np.log(F_s + 1e-12)))
+            if np.abs(q) < 1e-6:  # Handle q = 0
+                Z = np.exp(0.5 * np.mean(np.log(F_s ** 2 + 1e-12)))
             else:
-                Z = (np.mean(F_s ** (q / 2))) ** (1 / q)
+                Z = (np.mean(F_s ** q)) ** (1 / q)
             Z_q.append(Z)
-
+        
         Z_q_s.append(Z_q)
-
-    Z_q_s = np.array(Z_q_s)  # shape: (n_scales, n_q)
-    #st.write (f"Z_q_s shape: {Z_q_s.shape}")
-    #st.write (Z_q_s)
+    
+    Z_q_s = np.array(Z_q_s)
     log_Z_q_s = np.log2(Z_q_s + 1e-12)
-    st.write (f"cfs: {cfs.shape}")
-    N = len(signal)
-    t = np.linspace(0, 1, N)
-
-    fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=False)
-
-    target_width = 1000
-    #coef_ds = preprocess_for_plotting(np.abs(coef), target_width)
-    #maxima_ds = preprocess_for_plotting(maxima, target_width)
-    cfs = preprocess_for_plotting(np.abs(cfs), target_width)
-    
-    # 1. Eredeti jel
-    axs[0].plot(t, signal, color='black')
-    axs[0].set_title("Eredeti jel")
-    axs[0].set_ylabel("Amplitúdó")
-
-    # 2. CWT spektrum
-    extent = [0, 1, np.max(scales), np.min(scales)]
-    axs[1].imshow(np.abs(cfs), extent=extent, aspect='auto', cmap='viridis')
-    axs[1].set_title("CWT amplitúdó (Ricker hullám)")
-    axs[1].set_ylabel("Skála")
-
-    # 3. Modulus maxima
-    axs[2].imshow(Z_q_s, extent=extent, aspect='auto', cmap='hot')
-    axs[2].set_title("Z_q_s")
-    axs[2].set_ylabel("Skála")
-    st.pyplot(fig)
-
-    
-    
     
     h_q = []
     tau_q = []
     coef = []
     r2 = []
+    
     for i, q in enumerate(q_values):
         y = log_Z_q_s[:, i]
         x = log_scales
         slope, intercept, r_val, _, _ = linregress(x, y)
-        h = slope
-        h_q.append(h)
-        tau_q.append(q * h - 1)
+        h_q.append(slope)
+        tau_q.append(q * slope - 1)
         coef.append((slope, intercept))
-        r2.append(r_val**2)
-
+        r2.append(r_val ** 2)
+    
     h_q = np.array(h_q)
     tau_q = np.array(tau_q)
     coef = np.array(coef)
     r2 = np.array(r2)
-
-    # Deriválással: α(q), f(α)
+    
+    # Compute multifractal spectrum
     alpha = np.gradient(tau_q, q_values)
     f_alpha = q_values * alpha - tau_q
     
-    return alpha, f_alpha, tau_q, Z_q_s, coef, h_q, 0, r2
+    # Plotting
+    t = np.linspace(0, 1, N)
+    fig, axs = plt.subplots(3, 1, figsize=(12, 12))
     
-    #return {
-    #    "q": q_vals,
-    #    "h_q": h_q,
-    #    "tau_q": tau_q,
-    #    "alpha": alpha,
-    #    "f_alpha": f_alpha,
-    #    "Z_q_s": Z_q_s,
-    #    "log_scales": log_scales,
-    #    "coef": coef,
-    #    "r2": r2
-    #}
-    #return q_vals, h_q, alpha, f_alpha
+    # Original signal
+    axs[0].plot(t, signal, color='black')
+    axs[0].set_title("Original Signal")
+    axs[0].set_ylabel("Amplitude")
+    axs[0].set_xlabel("Time")
+    
+    # Detrended fluctuations
+    cfs_for_plot = preprocess_for_plotting(np.abs(cfs), target_width=1000)
+    axs[1].imshow(cfs_for_plot, extent=[0, 1, np.max(scales), np.min(scales)],
+                  aspect='auto', cmap='viridis')
+    axs[1].set_title("Detrended Fluctuations by Scale")
+    axs[1].set_ylabel("Scale")
+    axs[1].set_xlabel("Time")
+    
+    # Z(q, s) values
+    axs[2].imshow(Z_q_s, extent=[np.min(q_values), np.max(q_values), np.max(scales), np.min(scales)],
+                  aspect='auto', cmap='hot')
+    axs[2].set_title("Z(q, s) Values")
+    axs[2].set_ylabel("Scale")
+    axs[2].set_xlabel("q Value")
+    
+    plt.tight_layout()
+    plt.savefig('mfdfa_plots.png')
+    plt.close()
+    
+    return alpha, f_alpha, tau_q, Z_q_s, coef, h_q, log_scales, r2
+
 
 def prepare_signal (signal, padding_len=0, smoothing=0.1):
     """
