@@ -69,6 +69,8 @@ def main():
         st.success("A kísérlet adatai sikeresen mentve!")
 
 if __name__ == "__main__":
+    import os
+    os.environ["NUMBA_THREADING_LAYER"] = "tbb"
     
     st.set_page_config(page_title="Térképolvasás kísérlet 2024-2025", page_icon=":guardsman:", layout="wide")
     st.markdown(

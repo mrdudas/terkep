@@ -7,7 +7,7 @@ from scipy.interpolate import UnivariateSpline
 
 
 # --- 1. Log-log lineáris regresszió ---
-@njit(parallel=True)
+#@njit(parallel=True)
 def linear_regression_loglog(x, y):
     n = x.shape[0]
     sum_x, sum_y = np.sum(x), np.sum(y)
@@ -26,7 +26,7 @@ def linear_regression_loglog(x, y):
 
     return slope, intercept, r_squared
 
-@njit
+
 def compute_zq_r2_single(signal, q, window_sizes):
     """
     Egyetlen q értékre kiszámítja a Z_q skálázás log-log illesztési R² értékét.
@@ -58,7 +58,7 @@ def compute_zq_r2_single(signal, q, window_sizes):
     else:
         return np.nan
 
-@njit
+
 def compute_zq_r2_vs_q(signal, q_values, window_sizes):
     ret = np.zeros(len(q_values))
     for i in prange(len(q_values)):
@@ -134,7 +134,7 @@ def chhabra_jensen(signal, q_values, window_sizes, use_abs=True):
 
 
 # --- 2. Chhabra–Jensen multifraktál spektrum kiszámítása ---
-@njit(parallel=True)
+#@njit(parallel=True)
 def chhabra_jensen_multifractal(signal, q_values, window_sizes, keep_ratio=0.95):
     nq, ns = q_values.shape[0], window_sizes.shape[0]
     Ma, Mf, Md = np.zeros((nq, ns)), np.zeros((nq, ns)), np.zeros((nq, ns))
@@ -274,7 +274,7 @@ def plot_dq_curve(q_vals, Dq, title="D(q) spektrum"):
     return plt
 
 # --- 6. μ(q, i) mátrix számítása ---
-@njit(parallel=True)
+
 def compute_mu_q_matrix(signal, q_vals, window_size):
     nq = len(q_vals)
     valid_length = (len(signal) // window_size) * window_size

@@ -1,40 +1,74 @@
-
-
 import numpy as np
 from scipy.stats import norm
 from fbm import FBM
-import streamlit as st    
 
-def generate_gauss (length=1024):
-    """
-    Generate a Gaussian signal.
-    """
-    # Mű jel: Gauss-jel (nem multifraktál)
-    signal = norm.pdf(np.linspace(-5, 5, length))
-    return signal
 
-def cantor_measure(length=1024, N=10):
+def generate_gauss(length=1024):
+    """
+    Gauss-görbére illesztett nem-multifraktális tesztjel generálása.
+    """
+    return norm.pdf(np.linspace(-5, 5, length))
+
+
+def cantor_measure(length=1024):
+    """
+    Zajjal kombinált szinusz hullám, amely pszeudo-kvantált mintázatot ad.
+    """
     t = np.linspace(0, 1, length)
-    signal = np.sin(5 * np.pi * t) + np.random.normal(0, 0.1, len(t))
-    return signal
+    return np.sin(5 * np.pi * t) + np.random.normal(0, 0.1, len(t))
 
+
+def generate_test_signal(kind: str, length: int, alpha: float = 1.0):
+    """
+    Általános jelfeldolgozási benchmarkhoz használt szintetikus jelek.
+    """
+    if kind == "white":
+        return np.random.normal(0, 1, length)
+    elif kind == "brownian":
+        return np.cumsum(np.random.normal(0, 1, length))
+    elif kind == "chirp":
+        t = np.linspace(0, 1, length)
+        return np.sin(2 * np.pi * t * (1 + 10 * t))
+    elif kind == "sinus+noise":
+        t = np.linspace(0, 2 * np.pi, length)
+        return np.sin(5 * t) + 0.5 * np.random.normal(0, 1, length)
+    elif kind == "step":
+        return np.concatenate([np.ones(length // 2), -np.ones(length - length // 2)])
+    elif kind == "gauss":
+        return generate_gauss(length)
+    elif kind == "cantor":
+        return cantor_measure(length)
+    elif kind == "cascade":
+        return multiplicative_cascade(length)
+    elif kind == "fBm":
+        return Fractional_Brownian_Motion(length)
+    elif kind == "multifractal":
+        return generate_multifractal_signal(length)
+    elif kind == "binomial":
+        return generate_binomial_measure(length)
+    else:
+        raise ValueError(f"Ismeretlen jeltípus: {kind}")
+
+
+def generate_1_over_f_noise(N, alpha=1.0):
+    """
+    1/f^alpha típusú zaj generálása spektrális módszerrel (FFT).
+    """
+    rng = np.random.default_rng()
+    phases = rng.uniform(0, 2 * np.pi, N // 2 - 1)
+    amplitudes = 1.0 / np.power(np.arange(2, N // 2 + 1), alpha / 2)
+    re = amplitudes * np.cos(phases)
+    im = amplitudes * np.sin(phases)
+    spec = np.zeros(N, dtype=np.complex64)
+    spec[1:N // 2] = re + 1j * im
+    spec[-(N // 2) + 1:] = np.conj(spec[1:N // 2][::-1])
+    signal = np.fft.ifft(spec).real
+    return (signal - np.mean(signal)) / np.std(signal)
 
 
 def multiplicative_cascade(target_length=1024, weights=(0.6, 0.4), seed=None):
     """
-    Random multiplicative cascade szintetikus multifraktál jel generálása adott hosszra.
-
-    Parameters:
-        target_length : int
-            A kívánt jelsorozat hossza (a kimenet legfeljebb ez lesz, de pontosan ennyi, ha le is van vágva).
-        weights : tuple
-            A szorzótényezők minden lépésben (ált. (0.6, 0.4)).
-        seed : int or None
-            Véletlenszerűség szabályozásához.
-
-    Returns:
-        np.ndarray
-            A generált multifraktális jel (1D tömb, hossz = target_length).
+    Multiplikatív kaszkád alapú multifraktális jel generálása.
     """
     if seed is not None:
         np.random.seed(seed)
@@ -46,22 +80,23 @@ def multiplicative_cascade(target_length=1024, weights=(0.6, 0.4), seed=None):
         left = signal * weights[0]
         right = signal * weights[1]
         signal = np.concatenate([left, right])
-    st.write( signal[:target_length].max() )
+
     return signal[:target_length]
 
-def Fractional_Brownian_Motion (length=1024, H=0.7):
-    """
-    Generate a Fractional Brownian Motion (fBm) signal.
-    """
-    # fBm generálás
-    t = np.arange(length)
-    fBm = np.cumsum(np.random.normal(size=length)) * (t ** H)
-    return fBm
 
-def generate_multifractal_signal(length =1024, H=0.7, p=0.3):
-#def multifractal_cascade(n_iter=14, p=0.3):
-    """Generate a 1D multifractal measure using a multiplicative binomial cascade."""
-    n_iter = int(np.ceil(np.log2(length)))  
+def Fractional_Brownian_Motion(length=1024, H=0.7):
+    """
+    Fractional Brownian motion (fBm) jel generálása megadott Hurst-paraméterrel.
+    """
+    t = np.arange(1, length + 1)
+    return np.cumsum(np.random.normal(size=length)) * (t ** H)
+
+
+def generate_multifractal_signal(length=1024, H=0.7, p=0.3):
+    """
+    Multiplikatív binomiális kaszkádon alapuló multifraktális jel generálása.
+    """
+    n_iter = int(np.ceil(np.log2(length)))
     N = 2 ** n_iter
     measure = np.ones(1)
 
@@ -73,25 +108,13 @@ def generate_multifractal_signal(length =1024, H=0.7, p=0.3):
         measure[1::2] *= 1 - weights
 
     measure /= np.sum(measure)
-    #signal = np.cumsum(measure)  # Cumulative signal
-    signal = measure.copy()
-    return signal
+    return measure[:length]
+
 
 def generate_binomial_measure(length, p=0.7):
     """
-    Multiplikatív binomiális multifraktál mérő generálása egy adott hosszra.
-
-    Parameters:
-        length : int
-            A generált jelsorozat hossza. A legközelebbi 2^N hosszra lesz kerekítve.
-        p : float
-            Az elosztási paraméter (0 < p < 1), pl. 0.7
-
-    Returns:
-        np.ndarray:
-            Normalizált binomiális mérő [0, 1] intervallumban.
+    Klasszikus binomiális multifraktál mérő generálása.
     """
-    # Legkisebb 2^N hossz, ami >= length
     power = int(np.ceil(np.log2(length)))
     n = 2 ** power
 
@@ -101,10 +124,7 @@ def generate_binomial_measure(length, p=0.7):
         measure[::2] *= p
         measure[1::2] *= (1 - p)
 
-    # Ha kell, vágjuk le
     if n > length:
         measure = measure[:length]
 
-    # Normalizálás
-    measure = measure / np.sum(measure)
-    return measure
+    return measure / np.sum(measure)

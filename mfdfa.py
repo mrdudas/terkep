@@ -4,6 +4,7 @@ from scipy.stats import linregress
 from numpy.polynomial.polynomial import Polynomial
 import streamlit as st
 from numba import njit
+from scipy.interpolate import UnivariateSpline
 # Numpy-alapú mozgóátlag + lineáris interpoláció
 def moving_average_with_interpolation(x, window=3):
     kernel = np.ones(window) / window
@@ -63,134 +64,120 @@ def extend_array_polyfit(y, new_length):
     return y_extended
 
 
-def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5, 41), m=3):
+def mfdfa_multifractal_spectrum(signal, scales=None, q_values=np.linspace(-5, 5, 41), m=2):
     """
-    Compute the multifractal spectrum of a signal using MFDFA.
-    
-    Args:
-        signal: 1D numpy array, input time series
-        scales: Array of segment sizes (default: logarithmic scales)
-        q_values: Array of moment orders (default: -5 to 5)
-        m: Polynomial degree for detrending (default: 3)
-    
-    Returns:
-        alpha: Singularity strength
-        f_alpha: Multifractal spectrum
-        tau_q: Mass exponent
-        Z_q_s: Fluctuation functions
-        coef: Regression coefficients (slope, intercept)
-        h_q: Generalized Hurst exponents
-        log_scales: Logarithmic scales
-        r2: R-squared values for regression
+    MFDFA spektrum számítása spline-alapú Legendre-transzformációval,
+    részletes vizualizációval és illesztési R² értékekkel.
+
+    Visszatér:
+        alpha, f_alpha: multifraktál spektrum
+        tau_q: skálázási exponensek
+        F_q: fluctuation mátrix (q x scale)
+        coef: lineáris regressziós együtthatók (slope, intercept)
+        log_scales: skálák log2-ben
+        r2: illesztés minősége (R²)
     """
-    # Input validation
     signal = np.asarray(signal)
-    if signal.ndim != 1 or len(signal) < 100:
-        raise ValueError("Signal must be a 1D array with sufficient length.")
-    
     N = len(signal)
-    Y = np.cumsum(signal - np.mean(signal))  # Cumulative sum with mean subtraction
-    
-    # Default scales
+    if N < 100:
+        raise ValueError("A jel túl rövid multifraktál elemzéshez.")
+
+    Y = np.cumsum(signal - np.mean(signal))
+
+    # Skálák létrehozása, ha nincs megadva
     if scales is None:
-        scales = np.unique(np.logspace(2, np.log2(N//4), num=20, base=2, dtype=int))
-    
+        max_exp = int(np.floor(np.log2(N // 4)))
+        exponents = np.linspace(2, max_exp, num=15)
+        scales = np.unique(np.round(2 ** exponents).astype(int))
     scales = np.asarray(scales)
-    if np.any(scales <= 0) or np.any(scales > N//2):
-        raise ValueError("Scales must be positive and less than half the signal length.")
-    
-    log_scales = np.log2(scales)
     q_values = np.asarray(q_values)
-    
-    Z_q_s = []
-    cfs = np.zeros((len(scales), N))  # Store detrended fluctuations
-    i = 0
-    
-    for s in scales:
-        Ns = N // s
-        F_s = []
-        detrended_Y_at_scale = np.full_like(Y, np.nan)
-        
-        for start in range(0, Ns * s, s):
-            segment = Y[start:start + s]
-            x = np.arange(s)
-            coefs = Polynomial.fit(x, segment, m).convert().coef
-            fit = np.polyval(coefs[::-1], x)
-            detrended = segment - fit
-            fluctuation = np.sqrt(np.mean(detrended ** 2))  # RMS fluctuation
-            F_s.append(fluctuation)
-            detrended_Y_at_scale[start:start + s] = detrended
-        
-        F_s = np.array(F_s)
-        cfs[i] = detrended_Y_at_scale
-        i += 1
-        
-        Z_q = []
-        for q in q_values:
-            if np.abs(q) < 1e-6:  # Handle q = 0
-                Z = np.exp(0.5 * np.mean(np.log(F_s ** 2 + 1e-12)))
-            else:
-                Z = (np.mean(F_s ** q)) ** (1 / q)
-            Z_q.append(Z)
-        
-        Z_q_s.append(Z_q)
-    
-    Z_q_s = np.array(Z_q_s)
-    log_Z_q_s = np.log2(Z_q_s + 1e-12)
-    
-    h_q = []
-    tau_q = []
+    log_scales = np.log2(scales)
+
+    F_q = np.zeros((len(q_values), len(scales)))
+    r2 = np.zeros(len(q_values))
     coef = []
-    r2 = []
-    
-    for i, q in enumerate(q_values):
-        y = log_Z_q_s[:, i]
-        x = log_scales
-        slope, intercept, r_val, _, _ = linregress(x, y)
-        h_q.append(slope)
-        tau_q.append(q * slope - 1)
-        coef.append((slope, intercept))
-        r2.append(r_val ** 2)
-    
-    h_q = np.array(h_q)
+
+    for idx_s, s in enumerate(scales):
+        n_segments = N // s
+        if n_segments < 2:
+            F_q[:, idx_s] = np.nan
+            continue
+
+        segments = Y[:n_segments * s].reshape(n_segments, s)
+        local_flucts = []
+        for seg in segments:
+            x = np.arange(s)
+            coeffs = np.polyfit(x, seg, m)
+            trend = np.polyval(coeffs, x)
+            local_flucts.append(np.mean((seg - trend) ** 2))
+        F_s = np.array(local_flucts)
+
+        for idx_q, q in enumerate(q_values):
+            if abs(q) < 1e-6:
+                F_q[idx_q, idx_s] = np.exp(0.5 * np.mean(np.log(F_s + 1e-12)))
+            else:
+                F_q[idx_q, idx_s] = (np.mean(F_s ** (q / 2))) ** (1.0 / q)
+
+    # Tau(q) számítása
+    tau_q = []
+    for idx_q in range(len(q_values)):
+        fq_row = F_q[idx_q, :]
+        if np.any(fq_row <= 0) or np.any(np.isnan(fq_row)):
+            tau_q.append(np.nan)
+            coef.append((np.nan, np.nan))
+            r2[idx_q] = np.nan
+        else:
+            y = np.log2(fq_row + 1e-12)
+            x = log_scales
+            slope, intercept, rval, _, _ = linregress(x, y)
+            tau_q.append(slope)
+            coef.append((slope, intercept))
+            r2[idx_q] = rval ** 2
     tau_q = np.array(tau_q)
     coef = np.array(coef)
-    r2 = np.array(r2)
-    
-    # Compute multifractal spectrum
-    alpha = np.gradient(tau_q, q_values)
-    f_alpha = q_values * alpha - tau_q
-    
-    # Plotting
-    t = np.linspace(0, 1, N)
+
+    # Legendre-transzformáció spline-nal
+    valid_mask = ~np.isnan(tau_q)
+    if np.sum(valid_mask) < 3:
+        return np.array([]), np.array([]), tau_q, F_q, coef, log_scales, r2
+
+    q_valid = q_values[valid_mask]
+    tau_valid = tau_q[valid_mask]
+    try:
+        spline = UnivariateSpline(q_valid, tau_valid, k=3, s=0)
+        alpha = spline.derivative()(q_valid)
+        f_alpha = q_valid * alpha - tau_valid
+        mask = ~(np.isnan(alpha) | np.isinf(alpha) | np.isnan(f_alpha) | np.isinf(f_alpha))
+        alpha = alpha[mask]
+        f_alpha = f_alpha[mask]
+    except Exception as e:
+        print(f"Gradient calculation failed: {e}")
+        return np.array([]), np.array([]), tau_q, F_q, coef, log_scales, r2
+
+    # Vizuális ábrák
     fig, axs = plt.subplots(3, 1, figsize=(12, 12))
-    
-    # Original signal
-    axs[0].plot(t, signal, color='black')
-    axs[0].set_title("Original Signal")
-    axs[0].set_ylabel("Amplitude")
-    axs[0].set_xlabel("Time")
-    
-    # Detrended fluctuations
-    cfs_for_plot = preprocess_for_plotting(np.abs(cfs), target_width=1000)
-    axs[1].imshow(cfs_for_plot, extent=[0, 1, np.max(scales), np.min(scales)],
+
+    axs[0].imshow(F_q, extent=[np.min(log_scales), np.max(log_scales), np.max(q_values), np.min(q_values)],
                   aspect='auto', cmap='viridis')
-    axs[1].set_title("Detrended Fluctuations by Scale")
-    axs[1].set_ylabel("Scale")
-    axs[1].set_xlabel("Time")
-    
-    # Z(q, s) values
-    axs[2].imshow(Z_q_s, extent=[np.min(q_values), np.max(q_values), np.max(scales), np.min(scales)],
-                  aspect='auto', cmap='hot')
-    axs[2].set_title("Z(q, s) Values")
-    axs[2].set_ylabel("Scale")
-    axs[2].set_xlabel("q Value")
-    
+    axs[0].set_title("F_q skálafüggvények (log-log)")
+    axs[0].set_ylabel("q")
+    axs[0].set_xlabel("log2(skála)")
+
+    axs[1].plot(q_values, tau_q, marker='o')
+    axs[1].set_title("τ(q): Skálázási exponens")
+    axs[1].set_xlabel("q")
+    axs[1].set_ylabel("τ(q)")
+
+    axs[2].plot(alpha, f_alpha, marker='o')
+    axs[2].set_title("Multifraktál spektrum f(α)")
+    axs[2].set_xlabel("α")
+    axs[2].set_ylabel("f(α)")
+
     plt.tight_layout()
-    plt.savefig('mfdfa_plots.png')
+    plt.savefig("mfdfa_combined_plot.png")
     plt.close()
-    
-    return alpha, f_alpha, tau_q, Z_q_s, coef, h_q, log_scales, r2
+
+    return alpha, f_alpha, tau_q, F_q, coef, log_scales, r2
 
 
 def prepare_signal (signal, padding_len=0, smoothing=0.1):
